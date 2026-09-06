@@ -1,0 +1,11 @@
+langchain
+langchain-community
+langchain-core
+chromadb
+sentence-transformers
+huggingface-hub
+ragas
+datasets
+streamlit
+python-dotenv
+pypdf
