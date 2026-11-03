@@ -1,6 +1,8 @@
 langchain
 langchain-community
 langchain-core
+langchain-anthropic
+langchain-text-splitters
 chromadb
 sentence-transformers
 huggingface-hub

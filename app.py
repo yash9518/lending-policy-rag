@@ -15,16 +15,23 @@ except Exception:
     st.warning("Please index the policy database first using: `python src/ingest.py`")
     st.stop()
 
+st.sidebar.caption(agent.llm_status)
+
 tab1, tab2 = st.tabs(["Policy Query (RAG)", "Eligibility Verification Engine"])
 
 with tab1:
     query = st.text_input("Ask a lending policy guideline question:", 
                           value="What is the maximum LTV for affordable housing loans?")
     if st.button("Query Grounded Policy"):
-        with st.spinner("Searching ChromaDB vector store..."):
-            retrieved_text = agent.retrieve_policy(query)
-            st.subheader("Retrieved Clause Context")
-            st.info(retrieved_text)
+        with st.spinner("Searching ChromaDB vector store and drafting an answer..."):
+            result = agent.answer_policy_question(query)
+        if result["answer"]:
+            st.subheader("Answer")
+            st.markdown(result["answer"])
+        elif result["message"]:
+            st.caption(result["message"])
+        st.subheader("Retrieved Clause Context")
+        st.info("\n\n---\n\n".join(result["sources"]) or "No matching policy clause located.")
 
 with tab2:
     col1, col2 = st.columns(2)
