@@ -44,15 +44,16 @@ flowchart LR
 | **Golden set**: 44 labelled questions | Covers all 6 documents. Question types: direct, paraphrase, multi-hop, eligibility (approve / refer / decline), prompt injection, out-of-scope, and missing-information. Each label is checked against the source clause text. |
 | **CI** (GitHub Actions) | Runs the tests and BM25 eval on every push. Then runs BM25 vs dense vs hybrid with the real embedding model. Then, on `main` with an API key, the end-to-end agent eval with an LLM judge. Quality gates fail the build on regressions, and results are published to the job summary. |
 
-**Retrieval baseline**, BM25 only, on the 36 search questions (eligibility cases excluded because their citations come from the engine):
+**Retrieval results** on the 36 search questions (eligibility cases excluded because their citations come from the engine). Measured in CI with the real `all-MiniLM-L6-v2` model:
 
 | Retriever | hit@1 | recall@3 | MRR |
 | --- | --- | --- | --- |
 | BM25, no stemming or synonyms | 0.667 | 0.750 | 0.731 |
 | BM25 + stemming + synonyms | 0.722 | 0.806 | 0.778 |
-| Dense / hybrid | see the CI job summary | | |
+| **Dense (MiniLM embeddings)** | **0.750** | **0.917** | **0.829** |
+| Hybrid (equal-weight RRF) | 0.722 | 0.833 | 0.787 |
 
-The remaining misses are vocabulary gaps, such as "not allowed to lend to" vs "prohibited industries". Closing those is the job of the dense half of hybrid retrieval. The synonym list is deliberately not tuned to the test questions.
+Finding: on this corpus, dense retrieval alone beats equal-weight hybrid, because fusion lets the weaker BM25 ranking push down good dense results. The next step is a weighted fusion tuned on a separate validation split, so it isn't tuned to these same test questions. The synonym list was also deliberately not tuned to the test questions.
 
 ## Quick start
 
