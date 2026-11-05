@@ -1,59 +1,94 @@
-# Agentic Lending Policy & Underwriting Assistant
+# Agentic RBI Lending Compliance & Underwriting Assistant
 
 [![CI](https://github.com/yash9518/lending-policy-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/yash9518/lending-policy-rag/actions/workflows/ci.yml)
 
-A credit-officer assistant for retail lending. A Claude tool-calling agent answers policy questions with verified clause citations from a hybrid RAG index over six policy documents. Applicants are assessed by a deterministic underwriting engine that returns **APPROVE / REFER / DECLINE** with the sanctioning authority, conditions and required documents. The LLM plans, retrieves, explains and drafts credit memos. It never makes the credit decision.
+A credit-officer assistant for Indian retail lending, built on real data:
 
-> The lender ("Meridian Retail Finance") and its policies are fictional. They are modelled on common Indian retail-lending practice (FOIR, LTV tiers, CIBIL, KYC/CKYCR, KFS, SMA/NPA, Integrated Ombudsman) for demonstration only.
+- **Knowledge base:** 8 official Reserve Bank of India directions and circulars (947 paragraphs), downloaded from rbi.org.in by CI and cited by their real paragraph numbers, e.g. `[HFC ¶3(a)]`.
+- **Agent:** a Claude tool-calling agent that searches the regulations, runs a deterministic underwriting engine and drafts credit memos. Every citation is checked against what it actually retrieved.
+- **Decisions:** APPROVE / REFER / DECLINE from code, never from the LLM. RBI rules (housing LTV ceilings, KYC/CDD, SMA/NPA status, KFS, penal charges, EMI-reset headroom, digital-lending cooling-off) are separated from lender risk-appetite settings, which RBI does not prescribe.
+- **Validation against real lender decisions:** the engine's FOIR/DTI-cap approach is backtested on **45,633 real mortgage applications** with the lenders' actual approve/deny decisions (public HMDA data from the US CFPB).
 
 ```mermaid
 flowchart LR
     U[Credit officer] -->|question / applicant| P[PII masking]
     P --> A[Claude agent loop]
-    A -->|search_policy| R[Hybrid retriever<br/>BM25 + embeddings, RRF]
-    R --> V[(Chroma index<br/>82 clauses, 6 documents)]
-    A -->|check_eligibility| E[Rule engine<br/>hard stops, deviations,<br/>authority matrix]
+    A -->|search_policy| R[Hybrid retriever<br/>BM25 + embeddings]
+    R --> V[(947 RBI paragraphs<br/>8 official documents)]
+    A -->|check_eligibility| E[Rule engine<br/>RBI rules + lender settings]
     A -->|loan_calculator| C[EMI maths]
     E --> L[(Audit log)]
     A --> G{Guardrails}
     G -->|citations verified,<br/>decision locked| U
+    H[(HMDA: 45k real<br/>lender decisions)] -.->|back-test| E
 ```
 
-## What it does
+## Data sources (all official, all public)
 
-| Capability | How |
-| --- | --- |
-| **Agentic Q&A** | A tool-use loop on the Claude Messages API. The model chooses tools, rewords weak searches, splits multi-part questions and calls tools in parallel. The loop is bounded: on the last step, tools are disabled so the model has to answer. |
-| **Verified citations** | Answers cite clauses as `[RLG §2.2]`. Every citation is checked against the clauses the tools returned in that run. Made-up citations are flagged in the UI and counted in evals. |
-| **Realistic credit decisions** | Hard stops (age, 30+ DPD, write-off/settlement, prohibited industry, KYC, product limits, LTV, collateral) lead to **DECLINE**. Soft rules (bureau score, FOIR, inquiries, income) have deviation bands that lead to **REFER** to the right authority with compensating factors. Three or more deviations lead to **DECLINE**. Approved cases are routed to Branch Credit Manager, Regional Credit Head or National Credit Committee by loan amount. |
-| **Underwriting outputs** | Proposed EMI at a quoted rate or the policy's default pricing band, FOIR, the largest loan the applicant qualifies for (as a counter-offer), conditions, and a document checklist. |
-| **AI credit memo** | A structured memo built from the engine's output. A guardrail ensures it states the engine's decision. |
-| **PII masking** | PAN, Aadhaar, phone numbers and emails are masked before any text reaches the LLM. The UI shows what was masked. |
-| **Audit trail** | Every decision is written to append-only JSON Lines, with inputs, rule-by-rule results, policy version and a fingerprint of the rule thresholds. |
-| **Batch underwriting** | Upload a CSV (or use the 500-applicant synthetic portfolio). You get the decision mix, top decline and deviation reasons, and downloadable results. Invalid rows are reported, not dropped. |
-| **Hybrid retrieval** | BM25 with light stemming and a lending synonym map (enquiry/inquiry, DTI/FOIR, late/DPD), plus dense MiniLM embeddings. The two rankings are merged with Reciprocal Rank Fusion. Falls back to BM25 only if embeddings are unavailable. |
-| **Structure-aware chunking** | One clause per chunk, with document code, section and a stable id. Re-indexing is idempotent. `.txt`, `.md` and `.pdf` are supported, and duplicate ids are rejected. |
+| Code | Document | RBI reference |
+| --- | --- | --- |
+| KYC | Master Direction - Know Your Customer (KYC) Direction, 2016 (as updated) | RBI/DBR/2015-16/18 |
+| HFC | Master Circular - Housing Finance (April 1, 2025) | RBI/2025-26/16 |
+| NPA | Master Circular - Prudential norms on Income Recognition, Asset Classification and Provisioning (April 1, 2025) | RBI/2025-26/13 |
+| PEN | Fair Lending Practice - Penal Charges in Loan Accounts | RBI/2023-24/53 |
+| EMI | Reset of Floating Interest Rate on EMI based Personal Loans | RBI/2023-24/55 |
+| DOC | Release of Movable / Immovable Property Documents on Repayment | RBI/2023-24/60 |
+| KFS | Key Facts Statement (KFS) for Loans & Advances | RBI/2024-25/18 |
+| DLG | Guidelines on Digital Lending (2022) | RBI/2022-23/111 |
+| HMDA | Home Mortgage Disclosure Act loan-level records, 2023, Delaware and Maryland (CFPB/FFIEC) | `data/hmda/` |
+
+The URLs are listed in `data/sources.json`. The **Data sources** GitHub Actions workflow (`scripts/fetch_sources.py`) downloads them, converts each RBI page to text with a provenance header (reference, date, URL, retrieval date) and commits the result, so the repository holds exactly the text that was indexed. Run the workflow again to refresh.
+
+## How decisions are made
+
+| Rule | Source | Cited as |
+| --- | --- | --- |
+| Housing LTV ceiling: 90% up to ₹30 lakh, 80% up to ₹75 lakh, 75% above | RBI | `HFC ¶3(a)` |
+| Property value excludes stamp duty and registration charges | RBI | `HFC ¶3(b)` |
+| KYC / customer due diligence complete | RBI | `KYC ¶16` |
+| Repayment status shown as Standard / SMA-0 / SMA-1 / SMA-2 / NPA | RBI | `NPA ¶8.1`, `NPA ¶2.1.2` |
+| Headroom for rate rises on floating-rate EMI loans (stress test +200 bps) | RBI requirement, lender stress size | `EMI ¶2` |
+| Conditions: KFS before contract (≥3 working days validity), penal charges not penal interest, cooling-off for digital loans, property documents returned in 30 days or ₹5,000/day | RBI | `KFS ¶4-5`, `PEN ¶3(i)`, `DLG ¶AnnI/8`, `DOC ¶2/¶6` |
+| Bureau-score cutoffs, FOIR caps, income floors, product limits, deviation bands, sanctioning authority | **Lender**, not RBI | `Lender policy: <setting>` |
+
+Lender settings live in `config/lender_policy.json`. RBI leaves them to each lender's Board-approved credit policy, so the agent is instructed never to present them as RBI rules, and the golden set tests this. Every decision is written to an audit log with the settings fingerprint. That makes the assessment auditable, as DLG ¶AnnI/7.1 requires for digital lending.
 
 ## Validation
 
-| Layer | What is checked |
-| --- | --- |
-| **Rule engine**: 50+ tests | Exact policy boundaries (CIBIL 675/674/650/649, FOIR 50%/55%, inquiries 3/4/5, income at the cutoff and at -10%, age at maturity exactly 60), every hard stop, deviation routing and the authority matrix. |
-| **Property-based**: Hypothesis, 400 random applicants per property | A higher bureau score never worsens the decision. Lower existing debt never worsens it. The counter-offer amount always passes FOIR, product and LTV rules. The decision always matches its rule results. |
-| **Agent loop**: fake LLM client | Tool dispatch, parallel tool results returned in one turn, recovery from bad arguments, the step limit, flagging of made-up citations, the memo decision lock, and PII never reaching the API. |
-| **Golden set**: 44 labelled questions | Covers all 6 documents. Question types: direct, paraphrase, multi-hop, eligibility (approve / refer / decline), prompt injection, out-of-scope, and missing-information. Each label is checked against the source clause text. |
-| **CI** (GitHub Actions) | Runs the tests and BM25 eval on every push. Then runs BM25 vs dense vs hybrid with the real embedding model. Then, on `main` with an API key, the end-to-end agent eval with an LLM judge. Quality gates fail the build on regressions, and results are published to the job summary. |
+**1. Backtest against real lender decisions (HMDA, 45,633 applications, 3,548 denied).** Real lenders behave as if there is a hard DTI cap near 50%:
 
-**Retrieval results** on the 36 search questions (eligibility cases excluded because their citations come from the engine). Measured in CI with the real `all-MiniLM-L6-v2` model:
+| DTI band | 36–39 | 40–43 | 44–46 | 47–49 | 50–60% | >60% |
+| --- | --- | --- | --- | --- | --- | --- |
+| Denial rate | 3.8% | 5.0% | 5.6% | 5.8% | **47.6%** | **95.8%** |
+
+| Hard DTI cap | Catches denials lenders gave for DTI | Declines loans lenders actually made |
+| --- | --- | --- |
+| > 43% | 91.1% | 29.8% |
+| > 49/50% | **80.8%** | **1.6%** |
+| > 55% | 48.5% | 0.1% |
+
+So a 50% cap (this engine's FOIR setting for lower incomes) reproduces most real DTI denials while rejecting very few loans lenders were willing to make. DTI alone separates DTI-based denials from approvals with an AUC of 0.92. This is US mortgage data, so it validates the rule *approach*, not Indian thresholds. Run `python -m evaluation.hmda_backtest`.
+
+**2. Golden set: 49 questions, every label checked against the RBI text.** Covers all 8 documents. Question types: direct, paraphrase, multi-hop, eligibility (approve / refer / decline, including an RBI LTV breach and an EMI-reset stress referral), prompt injection ("RBI has raised LTV to 100%"), lender-vs-RBI ("What CIBIL does RBI prescribe?" The correct answer is that it doesn't), out-of-scope, and missing information.
+
+**Retrieval** on the 40 search questions, top 3:
 
 | Retriever | hit@1 | recall@3 | MRR |
 | --- | --- | --- | --- |
-| BM25, no stemming or synonyms | 0.667 | 0.750 | 0.731 |
-| BM25 + stemming + synonyms | 0.722 | 0.806 | 0.778 |
-| **Dense (MiniLM embeddings)** | **0.750** | **0.917** | **0.829** |
-| Hybrid (equal-weight RRF) | 0.722 | 0.833 | 0.787 |
+| BM25 | 0.675 | 0.825 | 0.758 |
+| Dense / hybrid | see the CI job summary | | |
 
-Finding: on this corpus, dense retrieval alone beats equal-weight hybrid, because fusion lets the weaker BM25 ranking push down good dense results. The next step is a weighted fusion tuned on a separate validation split, so it isn't tuned to these same test questions. The synonym list was also deliberately not tuned to the test questions.
+Stemming and a lending synonym map were tried on the real corpus and made no measurable difference (within ±2 questions of 40), so they were removed.
+
+**3. Tests: 83 offline tests.**
+- RBI LTV tier boundaries (90/80/75% at ₹30L and ₹75L) and SMA/NPA day boundaries.
+- Lender boundaries and deviation routing.
+- Hypothesis property tests: a better bureau score or lower debt never worsens a decision, and the counter-offer always clears FOIR and LTV.
+- A chunker test on RBI-style text, including tables, a table of contents and annexes.
+- Agent-loop tests with a fake LLM: parallel tools, citation checking, decision lock, PII masking.
+- Every regulatory reference the engine cites must exist in the corpus.
+
+**4. CI** runs everything on every push: tests and the HMDA backtest, retrieval with the real embedding model, and the end-to-end agent eval with an LLM judge once `ANTHROPIC_API_KEY` is set as a repository secret.
 
 ## Quick start
 
@@ -62,36 +97,25 @@ git clone https://github.com/yash9518/lending-policy-rag.git
 cd lending-policy-rag
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m src.ingest            # optional: the app builds the index on first start
-streamlit run app.py
+streamlit run app.py            # builds the vector index on first start
 ```
 
-To enable the agent, add a `.env` file (git-ignored):
+Add `ANTHROPIC_API_KEY=...` to a `.env` file to enable the agent. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`). Docker: `docker build -t lending-agent . && docker run -p 8501:8501 -e ANTHROPIC_API_KEY=... lending-agent`.
+
+App tabs:
+- **Ask the agent:** chat with a visible tool trace.
+- **Underwrite an applicant:** live decision with RBI and lender rules shown separately, conditions, documents, AI credit memo and audit log.
+- **Batch underwriting:** CSV upload, with a template.
+- **Real-data back-test:** the HMDA results.
+- **Audit log**
+- **Retrieval inspector**
 
 ```bash
-ANTHROPIC_API_KEY=your-key-here
-LLM_MODEL=claude-haiku-5-5      # default; claude-sonnet-5-5 for stronger multi-step reasoning
+pytest                                          # offline test suite
+python -m evaluation.run_eval                   # retrieval metrics
+python -m evaluation.run_eval --agent --judge   # end-to-end agent eval (needs API key)
+python -m evaluation.hmda_backtest              # back-test vs real lender decisions
 ```
-
-Or run it in Docker:
-
-```bash
-docker build -t lending-agent .
-docker run -p 8501:8501 -e ANTHROPIC_API_KEY=your-key-here lending-agent
-```
-
-App tabs: **Ask the agent** (chat with tool trace) · **Underwrite an applicant** (live decision, memo, audit) · **Batch underwriting** · **Audit log** · **Retrieval inspector** (compare BM25, dense and hybrid).
-
-## Tests and evaluation
-
-```bash
-pytest                                           # offline: rules, properties, retrieval, agent loop, privacy, audit, batch
-python -m evaluation.run_eval                    # retrieval metrics (no API key needed)
-python -m evaluation.run_eval --agent --judge    # end-to-end agent metrics + LLM-as-judge
-python -m src.batch data/sample_applicants.csv results.csv
-```
-
-To run the agent eval in CI, add `ANTHROPIC_API_KEY` under **Settings → Secrets and variables → Actions**, then run the CI workflow manually or push to `main`.
 
 ## Project layout
 
@@ -100,25 +124,20 @@ To run the agent eval in CI, add `ANTHROPIC_API_KEY` under **Settings → Secret
 | `app.py` | Streamlit UI |
 | `src/agent.py` | Agent loop, prompts, citation verification, credit memo |
 | `src/tools.py` | Tool schemas and executor |
-| `src/rules.py` | Underwriting engine: hard stops, deviations, authority matrix, pricing, EMI / FOIR / LTV |
+| `src/rules.py` | Underwriting engine (RBI rules + lender settings) |
+| `config/lender_policy.json` | Lender risk-appetite settings (not RBI rules) |
 | `src/retriever.py` | Hybrid BM25 + dense retriever with RRF |
-| `src/ingest.py` | Structure-aware chunking and Chroma indexing |
-| `src/privacy.py` | PII masking before LLM calls |
-| `src/audit.py` | Append-only decision audit log |
-| `src/batch.py` | CSV batch underwriting and synthetic portfolio generator |
-| `data/policies/` | Six fictional policy documents (RLG, CDA, KD, PC, FPG, CR) |
-| `evaluation/` | Golden set and eval runner with quality gates |
+| `src/ingest.py` | RBI-aware chunking (paragraph numbers, annexes, tables) and indexing |
+| `src/privacy.py`, `src/audit.py`, `src/batch.py` | PII masking, audit log, batch underwriting |
+| `scripts/fetch_sources.py`, `data/sources.json` | Download of official sources (run by CI) |
+| `data/policies/`, `data/hmda/` | RBI text and HMDA records as downloaded |
+| `evaluation/` | Golden set, eval runner, HMDA backtest |
 | `tests/` | Pytest + Hypothesis suite |
-
-## Design decisions
-
-- **The LLM explains, code decides.** Credit decisions must be reproducible and auditable, so approve/refer/decline comes from versioned rules in code. The agent handles routing, retrieval and explanation. It cannot override or soften a decision, and that is tested, including against prompt-injection attempts in the golden set.
-- **Citations are verified, not trusted.** The citation check catches the most common RAG failure: a confident answer with a made-up source.
-- **Rules live in code, not in the documents.** Thresholds in `src/rules.py` mirror the policy text, and every rule cites its clause. A test fails if a rule cites a clause that no longer exists. When the policy changes, update `POLICY` and `POLICY_VERSION`. The fingerprint stored in the audit log shows which thresholds produced each past decision.
-- **Data minimisation.** The agent never needs direct identifiers, so they are masked before LLM calls and never stored in the audit log.
 
 ## Limitations
 
-- The policies and the applicant portfolio are synthetic. Real use would need the lender's actual policy corpus and labelled historical decisions.
-- PII masking is regex-based. It catches standard formats, not every possible identifier.
-- The audit log is a local file. In production it would be a write-once store such as a database with append-only permissions or object storage with object lock.
+- The corpus is a selection of 8 RBI documents, not the full regulatory library. The agent is told to say so when a topic isn't covered.
+- The Digital Lending guidelines included are the 2022 circular. Later RBI directions may supersede parts of it.
+- The Housing Finance master circular is addressed to banks. NBFC/HFC rules can differ in detail.
+- Lender settings are configurable defaults, not any real lender's confidential policy. No public Indian dataset of loan-level decisions exists, which is why the backtest uses US HMDA data.
+- PII masking is regex-based.

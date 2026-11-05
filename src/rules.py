@@ -2,78 +2,65 @@
 
 Every credit decision in this project comes from this module, never from the
 LLM. The agent calls it as a tool and explains the result; it cannot override
-it. Each rule cites the policy clause it implements.
+it. There are two kinds of rules, kept separate on purpose:
 
-Decisions follow the credit policy's three-way structure:
+* Regulatory rules come from Reserve Bank of India directions in
+  data/policies/ and cite the paragraph they implement, e.g. the housing
+  loan LTV ceilings of 90% / 80% / 75% (Master Circular - Housing Finance,
+  HFC ¶3(a)). They are not configurable.
+* Lender risk appetite (bureau-score cutoffs, FOIR caps, product limits,
+  deviation bands, approval authority) is not set by RBI. Each lender sets it
+  in a Board-approved credit policy, so it lives in config/lender_policy.json
+  and is cited as ``Lender policy: <setting>``.
 
+Decisions:
 * APPROVE  - every rule passes; routed to the sanctioning authority for the amount.
-* REFER    - only "soft" rules missed, each within a permitted deviation band
-             (CDA §2), and no more than two deviations. Needs a higher authority
-             and documented compensating factors.
-* DECLINE  - any hard stop (CDA §1) failed, a soft rule missed beyond its
-             deviation band, or three or more deviations.
-
-Thresholds mirror the documents in data/policies/. Editing the policy text
-does not change them; update POLICY below (and bump POLICY_VERSION).
+* REFER    - only lender soft limits missed, each within its deviation band, at most
+             ``max_deviations`` of them; needs a higher authority.
+* DECLINE  - a regulatory rule or lender hard stop failed, a soft limit was missed
+             beyond its band, or too many deviations.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Literal
 
+ROOT = Path(__file__).resolve().parent.parent
+LENDER_POLICY_PATH = Path(os.getenv("LENDER_POLICY", ROOT / "config" / "lender_policy.json"))
 LAKH = 100_000
-POLICY_VERSION = "RLG v4.2 / CDA v2.1 / PC v5.3 / KD v3.0"
 
-POLICY = {
-    "min_age": 21,
-    "max_age_at_maturity": 60,
-    "min_income": {"salaried": 25_000, "self_employed": 40_000},
-    "foir_income_breakpoint": 50_000,
-    "max_foir_low_income": 0.50,
-    "max_foir_high_income": 0.65,
-    "products": {
-        "Personal": {"min_amount": 50_000, "max_amount": 10 * LAKH, "min_tenure": 12, "max_tenure": 60, "min_cibil": 675},
-        "Housing": {"min_amount": 1, "max_amount": 35 * LAKH, "min_tenure": 1, "max_tenure": 240, "min_cibil": 650},
-        "Business": {"min_amount": 1, "max_amount": 50 * LAKH, "min_tenure": 1, "max_tenure": None, "min_cibil": 650},
-    },
-    "housing_ltv_breakpoint": 30 * LAKH,
-    "max_ltv_low": 0.80,
-    "max_ltv_high": 0.75,
-    "max_hard_inquiries_90d": 3,
-    "max_dpd_6m": 29,  # zero tolerance for 30+ DPD
-    "prohibited_industries": {
-        "speculative trading": ("speculative", "speculation", "f&o trading", "day trading"),
-        "unorganized money lending": ("money lend", "moneylend", "chit fund", "pawn"),
-        "cryptocurrency mining": ("crypto", "bitcoin", "mining rig"),
-    },
-    # Credit deviations (CDA §2)
-    "deviation": {
-        "cibil_points": 25,
-        "foir_points": 0.05,
-        "extra_inquiries": 1,
-        "income_shortfall": 0.10,
-        "max_deviations": 2,
-    },
-    # Sanctioning authority (CDA §4)
-    "authority": [(10 * LAKH, "Branch Credit Manager"), (25 * LAKH, "Regional Credit Head"),
-                  (float("inf"), "National Credit Committee")],
-    # Default rates used for FOIR when no rate is given (conservative end of PC §1-2)
-    "default_rate": {"Housing": 9.5, "Business": 18.0},
-    "personal_rate_bands": [(750, 11.0, 13.0), (700, 13.0, 16.0), (675, 16.0, 20.0), (650, 20.0, 22.0)],
+
+def load_lender_policy(path: Path = LENDER_POLICY_PATH) -> dict:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+LENDER = load_lender_policy()
+POLICY_VERSION = LENDER["version"]
+
+# Regulatory parameters, transcribed from the RBI text they cite.
+RBI = {
+    # Master Circular - Housing Finance (RBI/2025-26/16), para 3(a): LTV ceilings for individual housing loans.
+    "housing_ltv": [(30 * LAKH, 0.90), (75 * LAKH, 0.80), (float("inf"), 0.75)],
+    # IRACP Master Circular (RBI/2025-26/13), para 8.1 SMA buckets and para 2.1.2 NPA (>90 days overdue).
+    "sma": [(0, "Standard"), (30, "SMA-0"), (60, "SMA-1"), (90, "SMA-2")],
 }
 
 REFS = {
-    "age": "RLG §1.1", "income": "RLG §1.2", "foir": "RLG §1.3",
-    "Personal": "RLG §2.1", "Housing": "RLG §2.2", "Business": "RLG §2.3",
-    "cibil": "RLG §3.1", "inquiries": "RLG §3.2", "dpd": "RLG §3.3", "industry": "RLG §3.4",
-    "hard_stop_age": "CDA §1.1", "hard_stop_history": "CDA §1.2", "kyc": "CDA §1.5",
-    "dev_cibil": "CDA §2.1", "dev_foir": "CDA §2.2", "dev_inquiries": "CDA §2.3", "dev_income": "CDA §2.4",
-    "dev_max": "CDA §2.5", "comp_factors": "CDA §3.1", "authority": "CDA §4.1",
-    "docs_salaried": "KD §2.1", "docs_self_employed": "KD §2.2", "docs_audited": "KD §2.3",
-    "docs_property": "KD §3.1", "pricing_personal": "PC §1.1",
+    "housing_ltv": "HFC ¶3(a)", "ltv_cost_basis": "HFC ¶3(b)", "ltv_small_house": "HFC ¶3(c)",
+    "cdd_individual": "KYC ¶16", "sma": "NPA ¶8.1", "npa": "NPA ¶2.1.2",
+    "emi_headroom": "EMI ¶2", "kfs": "KFS ¶4", "kfs_validity": "KFS ¶5", "penal": "PEN ¶3(i)",
+    "penal_disclosure": "PEN ¶3(vi)", "documents_release": "DOC ¶2", "documents_compensation": "DOC ¶6",
+    "cooling_off": "DLG ¶AnnI/8", "digital_disbursal": "DLG ¶AnnI/3", "creditworthiness_record": "DLG ¶AnnI/7.1",
 }
+
+
+def lender_ref(setting: str) -> str:
+    return f"Lender policy: {setting}"
+
 
 LoanType = Literal["Personal", "Housing", "Business"]
 Employment = Literal["salaried", "self_employed"]
@@ -90,24 +77,31 @@ class Applicant:
     age: int = 30
     employment_type: Employment = "salaried"
     existing_emi: float = 0.0  # current monthly obligations, excluding this loan
-    annual_interest_rate: float | None = None  # None -> conservative product default
+    annual_interest_rate: float | None = None  # None -> lender's assumed rate for the product
+    rate_type: Literal["fixed", "floating"] = "fixed"
+    channel: Literal["branch", "digital"] = "branch"
     hard_inquiries_90d: int = 0
-    max_dpd_last_6m: int = 0
-    adverse_history: bool = False  # written-off/settled in 36 months, or wilful defaulter
-    kyc_complete: bool = True
+    max_dpd_last_6m: int = 0  # worst days-past-due on existing loans in the last 6 months
+    adverse_history: bool = False  # written-off / settled account, or wilful defaulter
+    kyc_complete: bool = True  # PAN/Form 60 + OVD obtained and verified (KYC CDD)
     industry: str = ""
-    property_value: float | None = None  # housing loans (for LTV)
+    property_value: float | None = None  # housing loans, excluding stamp duty & registration
     has_collateral: bool = False  # business loans
-    annual_turnover: float | None = None  # self-employed, for document requirements
 
     def __post_init__(self):
         self.loan_type = str(self.loan_type).strip().title()  # type: ignore[assignment]
         self.employment_type = str(self.employment_type).strip().lower().replace("-", "_").replace(" ", "_")  # type: ignore[assignment]
+        self.rate_type = str(self.rate_type).strip().lower()  # type: ignore[assignment]
+        self.channel = str(self.channel).strip().lower()  # type: ignore[assignment]
         errors = []
-        if self.loan_type not in POLICY["products"]:
-            errors.append(f"loan_type must be one of {list(POLICY['products'])}")
-        if self.employment_type not in POLICY["min_income"]:
+        if self.loan_type not in LENDER["products"]:
+            errors.append(f"loan_type must be one of {list(LENDER['products'])}")
+        if self.employment_type not in LENDER["min_monthly_income"]:
             errors.append("employment_type must be 'salaried' or 'self_employed'")
+        if self.rate_type not in ("fixed", "floating"):
+            errors.append("rate_type must be 'fixed' or 'floating'")
+        if self.channel not in ("branch", "digital"):
+            errors.append("channel must be 'branch' or 'digital'")
         if not 300 <= int(self.cibil_score) <= 900:
             errors.append("cibil_score must be between 300 and 900")
         if not 18 <= int(self.age) <= 100:
@@ -131,9 +125,7 @@ class Applicant:
     def rate(self) -> float:
         if self.annual_interest_rate is not None:
             return self.annual_interest_rate
-        if self.loan_type == "Personal":
-            return personal_rate_band(self.cibil_score)[1]
-        return POLICY["default_rate"][self.loan_type]
+        return LENDER["products"][self.loan_type]["assumed_rate"]
 
 
 @dataclass
@@ -142,6 +134,7 @@ class RuleResult:
     status: Status
     detail: str
     policy_ref: str
+    source: Literal["RBI", "Lender"] = "Lender"
     hard_stop: bool = False
 
     @property
@@ -207,152 +200,167 @@ def principal_for_emi(monthly_emi: float, annual_rate_pct: float, tenure_months:
     return monthly_emi * (growth - 1) / (r * growth)
 
 
-def personal_rate_band(cibil: int) -> tuple[float, float]:
-    for floor, low, high in POLICY["personal_rate_bands"]:
-        if cibil >= floor:
-            return low, high
-    return POLICY["personal_rate_bands"][-1][1:]
-
-
 def max_foir_for(income: float) -> float:
-    if income < POLICY["foir_income_breakpoint"]:
-        return POLICY["max_foir_low_income"]
-    return POLICY["max_foir_high_income"]
+    caps = LENDER["max_foir"]
+    return caps["below_breakpoint"] if income < LENDER["foir_income_breakpoint"] else caps["at_or_above_breakpoint"]
 
 
 def max_ltv_for(amount: float) -> float:
-    return POLICY["max_ltv_low"] if amount <= POLICY["housing_ltv_breakpoint"] else POLICY["max_ltv_high"]
+    """RBI LTV ceiling for an individual housing loan of this size (HFC ¶3(a))."""
+    for limit, ltv in RBI["housing_ltv"]:
+        if amount <= limit:
+            return ltv
+    return RBI["housing_ltv"][-1][1]
 
 
 def ltv_limit(property_value: float) -> float:
-    """Largest housing loan allowed by the tiered LTV rule for a property value."""
-    breakpoint_ = POLICY["housing_ltv_breakpoint"]
-    limit = min(POLICY["max_ltv_low"] * property_value, breakpoint_)
-    high_tier = POLICY["max_ltv_high"] * property_value
-    if high_tier > breakpoint_:
-        limit = max(limit, high_tier)
-    return limit
+    """Largest housing loan the tiered RBI LTV ceilings allow for a property value."""
+    best, lower = 0.0, 0.0
+    for limit, ltv in RBI["housing_ltv"]:
+        candidate = min(ltv * property_value, limit)
+        if candidate > lower:  # the loan must actually fall inside this tier
+            best = max(best, candidate)
+        lower = limit
+    return best
+
+
+def sma_status(dpd: int) -> str:
+    """RBI classification of an account by days past due (NPA ¶8.1, ¶2.1.2)."""
+    if dpd > 90:
+        return "NPA"
+    if dpd == 0:
+        return "Standard"
+    for upper, label in RBI["sma"][1:]:
+        if dpd <= upper:
+            return label
+    return "NPA"
 
 
 def max_eligible_amount(a: Applicant) -> float:
-    """Largest amount that satisfies FOIR (without deviation), the product cap
-    and LTV at the applicant's tenure and rate. 0 if below the product minimum."""
-    product = POLICY["products"][a.loan_type]
+    """Largest amount that clears FOIR (no deviation), the product cap and the RBI LTV ceiling.
+    0 if below the product minimum."""
+    product = LENDER["products"][a.loan_type]
     headroom = max_foir_for(a.monthly_income) * a.monthly_income - a.existing_emi
     amount = min(principal_for_emi(headroom, a.rate, a.tenure_months), product["max_amount"])
     if a.loan_type == "Housing" and a.property_value:
         amount = min(amount, ltv_limit(a.property_value))
-    amount = float(int(amount // 1000) * 1000)  # round down to the nearest thousand
+    amount = float(int(amount // 1000) * 1000)
     return amount if amount >= product["min_amount"] else 0.0
 
 
 def sanctioning_authority(amount: float, has_deviation: bool) -> str:
-    for limit, authority in POLICY["authority"]:
-        if amount <= limit:
-            if has_deviation and authority == "Branch Credit Manager":
-                return "Regional Credit Head"
+    for limit, authority in LENDER["authority"]:
+        if limit is None or amount <= limit:
+            if has_deviation and authority == LENDER["authority"][0][1]:
+                return LENDER["authority"][1][1]
             return authority
-    return POLICY["authority"][-1][1]
+    return LENDER["authority"][-1][1]
 
 
 def matched_prohibited_industry(industry: str) -> str | None:
     text = industry.lower()
-    for name, keywords in POLICY["prohibited_industries"].items():
+    for name, keywords in LENDER["prohibited_industries"].items():
         if any(k in text for k in keywords):
             return name
     return None
 
 
 def required_documents(a: Applicant) -> list[str]:
-    docs = ["PAN (or Form 60) and an Officially Valid Document for identity/address"]
-    if a.employment_type == "salaried":
-        docs.append(f"Salary slips (last 3 months) and bank statements (last 6 months) [{REFS['docs_salaried']}]")
-    else:
-        docs.append(f"ITR with computation (last 2 years) and bank statements (last 12 months) [{REFS['docs_self_employed']}]")
-        if (a.annual_turnover or 0) > 100 * LAKH:
-            docs.append(f"Audited financials and GST returns (last 4 quarters) [{REFS['docs_audited']}]")
+    docs = [f"PAN or Form 60, and an Officially Valid Document as proof of identity and address [{REFS['cdd_individual']}]",
+            f"{LENDER['income_documents'][a.employment_type]} [{lender_ref('income_documents')}]"]
     if a.loan_type == "Housing" or (a.loan_type == "Business" and a.has_collateral):
-        docs.append(f"Legal title report (13-year chain) and empanelled technical valuation [{REFS['docs_property']}]")
+        docs.append(f"Title and valuation report for the property [{lender_ref('collateral documentation')}]")
     return docs
 
 
 # --- evaluation ------------------------------------------------------------
 def evaluate(a: Applicant) -> Decision:
-    product = POLICY["products"][a.loan_type]
-    dev = POLICY["deviation"]
+    product = LENDER["products"][a.loan_type]
+    dev = LENDER["deviation"]
     results: list[RuleResult] = []
 
-    def hard(rule, ok, detail, ref):
-        results.append(RuleResult(rule, "pass" if ok else "fail", detail, ref, hard_stop=True))
+    def rbi(rule, ok, detail, ref):
+        results.append(RuleResult(rule, "pass" if ok else "fail", detail, ref, source="RBI", hard_stop=True))
 
-    def soft(rule, ok, within_band, detail, ref):
+    def hard(rule, ok, detail, setting):
+        results.append(RuleResult(rule, "pass" if ok else "fail", detail, lender_ref(setting), hard_stop=True))
+
+    def soft(rule, ok, within_band, detail, setting):
         status = "pass" if ok else ("deviation" if within_band else "fail")
-        results.append(RuleResult(rule, status, detail, ref))
+        results.append(RuleResult(rule, status, detail, lender_ref(setting)))
 
-    # Hard stops
-    hard("KYC", a.kyc_complete, "KYC complete." if a.kyc_complete else "KYC incomplete or unverifiable.", REFS["kyc"])
-    hard("Minimum age", a.age >= POLICY["min_age"],
-         f"Age {a.age} vs minimum {POLICY['min_age']} at application.", REFS["age"])
-    age_at_maturity = a.age + a.tenure_months / 12
-    hard("Age at maturity", age_at_maturity <= POLICY["max_age_at_maturity"],
-         f"Age at maturity {age_at_maturity:.1f} vs maximum {POLICY['max_age_at_maturity']}.", REFS["age"])
-    hard("Delinquency", a.max_dpd_last_6m <= POLICY["max_dpd_6m"],
-         f"Worst DPD in last 6 months: {a.max_dpd_last_6m} (30+ DPD not tolerated).", REFS["dpd"])
-    hard("Adverse bureau history", not a.adverse_history,
-         "Written-off/settled account in 36 months or wilful defaulter." if a.adverse_history
-         else "No write-off, settlement or wilful-default record.", REFS["hard_stop_history"])
-    prohibited = matched_prohibited_industry(a.industry) if a.industry else None
-    hard("Industry", prohibited is None,
-         f"Industry '{a.industry}' is prohibited ({prohibited})." if prohibited
-         else f"Industry '{a.industry or 'not stated'}' is not on the prohibited list.", REFS["industry"])
-    lo, hi = product["min_amount"], product["max_amount"]
-    hard("Loan amount", lo <= a.requested_amount <= hi,
-         f"Requested INR {a.requested_amount:,.0f}; {a.loan_type} loans allow up to INR {hi:,.0f}"
-         + (f" (minimum INR {lo:,.0f})" if lo > 1 else "") + ".", REFS[a.loan_type])
-    if product["max_tenure"] is not None:
-        hard("Tenure", product["min_tenure"] <= a.tenure_months <= product["max_tenure"],
-             f"Tenure {a.tenure_months} months; allowed {product['min_tenure']}-{product['max_tenure']} months.",
-             REFS[a.loan_type])
+    # --- Regulatory (RBI) ---
+    rbi("KYC / CDD", a.kyc_complete,
+        "Customer due diligence complete." if a.kyc_complete
+        else "KYC incomplete: PAN/Form 60 and an OVD must be obtained before establishing the relationship.",
+        REFS["cdd_individual"])
+    status = sma_status(a.max_dpd_last_6m)
     if a.loan_type == "Housing":
         if a.property_value:
             ltv = a.requested_amount / a.property_value
-            max_ltv = max_ltv_for(a.requested_amount)
-            hard("Loan-to-value", ltv <= max_ltv, f"LTV {ltv:.1%} vs maximum {max_ltv:.0%} for this loan size.",
-                 REFS["Housing"])
+            cap = max_ltv_for(a.requested_amount)
+            rbi("Loan-to-value", ltv <= cap + 1e-9,
+                f"LTV {ltv:.1%} vs RBI ceiling {cap:.0%} for a housing loan of INR {a.requested_amount:,.0f} "
+                f"(90% up to 30 lakh, 80% up to 75 lakh, 75% above).", REFS["housing_ltv"])
         else:
-            hard("Loan-to-value", False, "Property value not provided; LTV cannot be verified.", REFS["Housing"])
-    if a.loan_type == "Business":
-        hard("Collateral", a.has_collateral,
-             "Commercial/residential collateral is mandatory for business loans"
-             + (" and has been offered." if a.has_collateral else " but none was offered."), REFS["Business"])
+            rbi("Loan-to-value", False, "Property value not provided; the RBI LTV ceiling cannot be verified.",
+                REFS["housing_ltv"])
 
-    # Soft rules with permitted deviation bands
-    min_income = POLICY["min_income"][a.employment_type]
+    # --- Lender hard stops ---
+    hard("Minimum age", a.age >= LENDER["min_age"], f"Age {a.age} vs minimum {LENDER['min_age']}.", "min_age")
+    age_at_maturity = a.age + a.tenure_months / 12
+    hard("Age at maturity", age_at_maturity <= LENDER["max_age_at_maturity"],
+         f"Age at maturity {age_at_maturity:.1f} vs maximum {LENDER['max_age_at_maturity']}.", "max_age_at_maturity")
+    hard("Repayment track", a.max_dpd_last_6m <= LENDER["max_dpd_last_6m"],
+         f"Worst DPD in last 6 months: {a.max_dpd_last_6m} (RBI status: {status} [{REFS['sma']}]); "
+         f"lender tolerates up to {LENDER['max_dpd_last_6m']} days.", "max_dpd_last_6m")
+    hard("Adverse bureau history", not a.adverse_history,
+         "Written-off/settled account or wilful defaulter." if a.adverse_history
+         else "No write-off, settlement or wilful-default record.", "adverse_history")
+    prohibited = matched_prohibited_industry(a.industry) if a.industry else None
+    hard("Industry", prohibited is None,
+         f"Industry '{a.industry}' is excluded ({prohibited})." if prohibited
+         else f"Industry '{a.industry or 'not stated'}' is not excluded.", "prohibited_industries")
+    hard("Loan amount", product["min_amount"] <= a.requested_amount <= product["max_amount"],
+         f"Requested INR {a.requested_amount:,.0f}; {a.loan_type} range INR {product['min_amount']:,.0f}"
+         f"-{product['max_amount']:,.0f}.", f"products.{a.loan_type}.amount")
+    hard("Tenure", product["min_tenure"] <= a.tenure_months <= product["max_tenure"],
+         f"Tenure {a.tenure_months} months; allowed {product['min_tenure']}-{product['max_tenure']}.",
+         f"products.{a.loan_type}.tenure")
+    if product.get("collateral_required"):
+        hard("Collateral", a.has_collateral,
+             "Collateral offered." if a.has_collateral else "Collateral is required for this product but none was offered.",
+             f"products.{a.loan_type}.collateral_required")
+
+    # --- Lender soft limits with deviation bands ---
+    min_income = LENDER["min_monthly_income"][a.employment_type]
     soft("Minimum income", a.monthly_income >= min_income,
          a.monthly_income >= min_income * (1 - dev["income_shortfall"]),
-         f"Net monthly income INR {a.monthly_income:,.0f} vs INR {min_income:,.0f} for "
-         f"{a.employment_type.replace('_', '-')} applicants (deviation allowed down to "
-         f"INR {min_income * (1 - dev['income_shortfall']):,.0f}).",
-         REFS["income"] if a.monthly_income >= min_income else REFS["dev_income"])
-
+         f"Net monthly income INR {a.monthly_income:,.0f} vs INR {min_income:,.0f} "
+         f"(deviation allowed down to INR {min_income * (1 - dev['income_shortfall']):,.0f}).", "min_monthly_income")
     proposed = emi(a.requested_amount, a.rate, a.tenure_months)
     foir = (a.existing_emi + proposed) / a.monthly_income
     cap = max_foir_for(a.monthly_income)
-    soft("FOIR / DTI", foir <= cap, foir <= cap + dev["foir_points"] + 1e-9,
+    soft("FOIR", foir <= cap, foir <= cap + dev["foir_points"] + 1e-9,
          f"FOIR {foir:.1%} (existing EMI INR {a.existing_emi:,.0f} + proposed EMI INR {proposed:,.0f} at "
-         f"{a.rate:.2f}%) vs cap {cap:.0%} (deviation allowed to {cap + dev['foir_points']:.0%}).",
-         REFS["foir"] if foir <= cap else REFS["dev_foir"])
+         f"{a.rate:.2f}%) vs cap {cap:.0%}.", "max_foir")
+    if a.rate_type == "floating":
+        stressed_rate = a.rate + LENDER["floating_rate_stress_bps"] / 100
+        stressed = (a.existing_emi + emi(a.requested_amount, stressed_rate, a.tenure_months)) / a.monthly_income
+        soft("Rate-rise headroom", stressed <= cap + dev["foir_points"] + 1e-9,
+             stressed <= cap + 2 * dev["foir_points"] + 1e-9,
+             f"FOIR {stressed:.1%} if the rate rises {LENDER['floating_rate_stress_bps']} bps to {stressed_rate:.2f}%. "
+             f"RBI requires headroom for EMI increases on floating-rate loans [{REFS['emi_headroom']}].",
+             "floating_rate_stress_bps")
     min_cibil = product["min_cibil"]
     soft("Bureau score", a.cibil_score >= min_cibil, a.cibil_score >= min_cibil - dev["cibil_points"],
-         f"CIBIL {a.cibil_score} vs minimum {min_cibil} for {a.loan_type} loans "
-         f"(deviation allowed down to {min_cibil - dev['cibil_points']}).",
-         REFS["cibil"] if a.cibil_score >= min_cibil else REFS["dev_cibil"])
-    max_inq = POLICY["max_hard_inquiries_90d"]
+         f"CIBIL {a.cibil_score} vs minimum {min_cibil} (deviation allowed down to {min_cibil - dev['cibil_points']}).",
+         f"products.{a.loan_type}.min_cibil")
+    max_inq = LENDER["max_hard_inquiries_90d"]
     soft("Hard inquiries", a.hard_inquiries_90d <= max_inq, a.hard_inquiries_90d <= max_inq + dev["extra_inquiries"],
-         f"{a.hard_inquiries_90d} hard inquiries in 90 days vs maximum {max_inq}.",
-         REFS["inquiries"] if a.hard_inquiries_90d <= max_inq else REFS["dev_inquiries"])
+         f"{a.hard_inquiries_90d} hard inquiries in 90 days vs maximum {max_inq}.", "max_hard_inquiries_90d")
 
-    # Decision
+    # --- Decision ---
     deviations = [r for r in results if r.status == "deviation"]
     conditions: list[str] = []
     if any(r.status == "fail" for r in results):
@@ -361,29 +369,35 @@ def evaluate(a: Applicant) -> Decision:
         decision = "DECLINE"
         results.append(RuleResult("Deviation count", "fail",
                                   f"{len(deviations)} deviations; at most {dev['max_deviations']} may be combined.",
-                                  REFS["dev_max"]))
+                                  lender_ref("deviation.max_deviations")))
     elif deviations:
         decision = "REFER"
-        if any(r.rule != "Hard inquiries" for r in deviations):
-            conditions.append(f"Document at least two compensating factors [{REFS['comp_factors']}].")
-        else:
-            conditions.append("Confirm the inquiries relate to a single loan-shopping episode "
-                              f"[{REFS['dev_inquiries']}].")
-        if any(r.rule == "Minimum income" for r in deviations):
-            conditions.append(f"Employer must be a listed company or government entity [{REFS['dev_income']}].")
+        conditions.append(f"Document compensating factors for: {', '.join(r.rule for r in deviations)} "
+                          f"[{lender_ref('deviation')}].")
     else:
         decision = "APPROVE"
 
-    only_inquiry_deviation = bool(deviations) and all(r.rule == "Hard inquiries" for r in deviations)
     authority = None
     if decision != "DECLINE":
-        authority = sanctioning_authority(a.requested_amount, bool(deviations) and not only_inquiry_deviation)
-        conditions.append(f"Sanction by {authority} under maker-checker [{REFS['authority']}].")
-    if a.loan_type == "Personal" and a.annual_interest_rate is not None:
-        low, high = personal_rate_band(a.cibil_score)
-        if not low <= a.annual_interest_rate <= high:
-            conditions.append(f"Quoted rate {a.annual_interest_rate}% is outside the {low}-{high}% band for "
-                              f"this bureau score [{REFS['pricing_personal']}].")
+        only_inquiries = bool(deviations) and all(r.rule == "Hard inquiries" for r in deviations)
+        authority = sanctioning_authority(a.requested_amount, bool(deviations) and not only_inquiries)
+        conditions.append(f"Sanction by {authority} [{lender_ref('authority')}].")
+        conditions.append(f"Provide the Key Facts Statement before the loan contract is executed, valid for at least "
+                          f"3 working days [{REFS['kfs']}, {REFS['kfs_validity']}].")
+        conditions.append(f"Any penalty for non-compliance must be a penal charge, not penal interest, and be disclosed "
+                          f"in the KFS [{REFS['penal']}, {REFS['penal_disclosure']}].")
+        conditions.append(f"Record the creditworthiness assessment auditably (audit log) [{REFS['creditworthiness_record']}].")
+        if a.rate_type == "floating":
+            conditions.append(f"Explain how benchmark rate changes affect EMI/tenor at sanction [{REFS['emi_headroom']}].")
+        if a.channel == "digital":
+            conditions.append(f"Offer a cooling-off period of at least 3 days (tenor >= 7 days) and disburse directly "
+                              f"to the borrower's bank account [{REFS['cooling_off']}, {REFS['digital_disbursal']}].")
+        if a.loan_type == "Housing":
+            conditions.append(f"Exclude stamp duty and registration charges from the property value used for LTV "
+                              f"[{REFS['ltv_cost_basis']}].")
+        if a.loan_type == "Housing" or a.has_collateral:
+            conditions.append(f"Release original property documents within 30 days of closure; INR 5,000 per day of "
+                              f"delay is payable otherwise [{REFS['documents_release']}, {REFS['documents_compensation']}].")
 
     return Decision(
         decision=decision,
@@ -401,5 +415,6 @@ def evaluate(a: Applicant) -> Decision:
 
 
 def policy_fingerprint() -> str:
-    """Stable hash of the rule thresholds, stored with every audited decision."""
-    return hashlib.sha256(json.dumps(POLICY, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    """Stable hash of the lender settings + regulatory parameters, stored with every audited decision."""
+    payload = json.dumps({"lender": LENDER, "rbi": RBI}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:12]

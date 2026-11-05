@@ -5,7 +5,7 @@
     python -m evaluation.run_eval --agent --judge   # + LLM-as-judge faithfulness score
     python -m evaluation.run_eval --min-recall 0.9  # exit non-zero below a threshold (used in CI)
 
-Retrieval metrics, per retriever (bm25_plain baseline, bm25, dense, hybrid):
+Retrieval metrics, per retriever (bm25, dense, hybrid):
     hit@1          top result is an expected clause
     recall@k       all expected clauses appear in the top k
     MRR            mean reciprocal rank of the first expected clause
@@ -30,7 +30,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from src.ingest import load_chunks
-from src.retriever import HybridRetriever, plain_tokenize
+from src.retriever import HybridRetriever
 
 HERE = Path(__file__).parent
 GOLDEN = json.loads((HERE / "golden_set.json").read_text())
@@ -53,8 +53,7 @@ def normalise(text: str) -> str:
 
 
 def retrieval_metrics(retriever: HybridRetriever, k: int) -> dict:
-    baseline = HybridRetriever(retriever.chunks, use_dense=False, analyzer=plain_tokenize)
-    runs = [("bm25_plain", baseline, "bm25"), ("bm25", retriever, "bm25")]
+    runs = [("bm25", retriever, "bm25")]
     if retriever.collection is not None:
         runs += [("dense", retriever, "dense"), ("hybrid", retriever, "hybrid")]
     # Eligibility cases get their citations from the rule engine, not from search.

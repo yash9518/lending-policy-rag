@@ -19,9 +19,10 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "search_policy",
         "description": (
             "Search the lending policy documents and return the most relevant clauses, each with a "
-            "citation id (e.g. 'RLG §2.2'). The corpus covers underwriting rules (RLG), credit deviations and "
-            "approval authority (CDA), KYC and documentation (KD), pricing and charges (PC), fair practices "
-            "and grievances (FPG), and collections (CR). Use it for any question about policy "
+            "citation id (e.g. 'HFC ¶3(a)'). The corpus is official Reserve Bank of India text: KYC Master "
+            "Direction (KYC), Housing Finance Master Circular (HFC), asset classification / NPA norms (NPA), "
+            "penal charges (PEN), EMI reset on floating-rate loans (EMI), Key Facts Statement (KFS), digital "
+            "lending guidelines (DLG) and release of property documents (DOC). Use it for any question about "
             "rules, limits, thresholds or definitions. Call it again with a reworded or narrower query if "
             "the first results do not answer the question; ask about one topic per call."
         ),
@@ -55,12 +56,13 @@ TOOL_SCHEMAS: list[dict] = [
                 "age": {"type": "integer", "description": "Applicant age in years (default 30)."},
                 "employment_type": {"type": "string", "enum": ["salaried", "self_employed"]},
                 "existing_emi": {"type": "number", "description": "Existing monthly EMIs in INR (default 0)."},
-                "annual_interest_rate": {"type": "number", "description": "Annual rate in %. Omit to use the policy's conservative default for the product/score."},
+                "annual_interest_rate": {"type": "number", "description": "Annual rate in %. Omit to use the lender's assumed rate for the product."},
                 "hard_inquiries_90d": {"type": "integer", "minimum": 0},
                 "max_dpd_last_6m": {"type": "integer", "minimum": 0, "description": "Worst days-past-due in 6 months."},
                 "adverse_history": {"type": "boolean", "description": "Write-off/settlement in 36 months or wilful defaulter."},
                 "kyc_complete": {"type": "boolean", "description": "False if KYC is incomplete (default true)."},
-                "annual_turnover": {"type": "number", "description": "Annual turnover in INR (self-employed)."},
+                "rate_type": {"type": "string", "enum": ["fixed", "floating"], "description": "Default fixed."},
+                "channel": {"type": "string", "enum": ["branch", "digital"], "description": "Default branch."},
                 "industry": {"type": "string", "description": "Applicant's business/industry, if relevant."},
                 "property_value": {"type": "number", "description": "Property value in INR (housing loans)."},
                 "has_collateral": {"type": "boolean", "description": "Collateral offered (business loans)."},

@@ -20,6 +20,7 @@ applicants = st.builds(
     hard_inquiries_90d=st.integers(0, 6),
     max_dpd_last_6m=st.integers(0, 60),
     property_value=st.floats(500_000, 20_000_000),
+    rate_type=st.sampled_from(["fixed", "floating"]),
     has_collateral=st.booleans(),
 )
 
@@ -49,7 +50,7 @@ def test_counter_offer_passes_amount_rules(a):
         return
     d = evaluate(Applicant(**{**a.__dict__, "requested_amount": offer}))
     statuses = {r.rule: r.status for r in d.results}
-    assert statuses["FOIR / DTI"] == "pass"
+    assert statuses["FOIR"] == "pass"
     assert statuses["Loan amount"] == "pass"
     if a.loan_type == "Housing":
         assert statuses["Loan-to-value"] == "pass"

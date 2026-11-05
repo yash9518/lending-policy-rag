@@ -1,7 +1,7 @@
 """Batch underwriting of an applicant CSV through the rule engine.
 
-    python -m src.batch data/sample_applicants.csv results.csv
-    python -m src.batch --generate 500 data/sample_applicants.csv   # synthetic portfolio
+    python -m src.batch applicants.csv results.csv
+    python -m src.batch --template applicants.csv   # write an empty CSV with the expected columns
 
 Rows that fail validation are reported with their error rather than
 stopping the run, which is how a real intake file behaves (typos, blanks).
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import random
 from collections import Counter
 from dataclasses import fields
 from pathlib import Path
@@ -66,59 +65,18 @@ def summarise(results: list[dict]) -> dict:
             "top_decline_reasons": reasons.most_common(5), "top_deviations": deviations.most_common(5)}
 
 
-def generate_portfolio(n: int, seed: int = 7) -> list[dict]:
-    """Synthetic applicants with plausible Indian retail-lending distributions."""
-    rng = random.Random(seed)
-    rows = []
-    for i in range(1, n + 1):
-        loan_type = rng.choices(["Personal", "Housing", "Business"], weights=[6, 3, 1])[0]
-        employment = "self_employed" if loan_type == "Business" or rng.random() < 0.25 else "salaried"
-        income = round(rng.lognormvariate(10.95, 0.5), -2)  # median ~INR 57k
-        cibil = int(min(900, max(300, rng.gauss(725, 55))))
-        age = rng.randint(22, 58)
-        existing_emi = round(income * rng.choice([0, 0, 0, 0.1, 0.15, 0.25, 0.4]), -2)
-        row = {"application_id": f"APP{i:05d}", "loan_type": loan_type, "employment_type": employment,
-               "age": age, "monthly_income": income, "cibil_score": cibil, "existing_emi": existing_emi,
-               "hard_inquiries_90d": rng.choices([0, 1, 2, 3, 4, 5], weights=[40, 25, 15, 10, 6, 4])[0],
-               "max_dpd_last_6m": rng.choices([0, 0, 0, 0, 15, 45], weights=[85, 5, 3, 2, 3, 2])[0],
-               "adverse_history": rng.random() < 0.02, "industry": "", "property_value": "",
-               "has_collateral": "", "annual_turnover": ""}
-        # Requested amounts scale with income, as real applications do; a minority over-ask.
-        if loan_type == "Personal":
-            amount = income * rng.uniform(3, 12) * (1.6 if rng.random() < 0.15 else 1)
-            row.update(requested_amount=int(min(max(amount, 50_000), 1_100_000) // 10_000 * 10_000),
-                       tenure_months=rng.choice([12, 24, 36, 48, 60]))
-        elif loan_type == "Housing":
-            age = row["age"] = rng.randint(24, 48)
-            prop = round(income * rng.uniform(30, 70), -4)
-            row.update(property_value=prop, requested_amount=round(prop * rng.uniform(0.55, 0.85), -4),
-                       tenure_months=min(rng.choice([180, 240]), (60 - age) * 12))
-        else:
-            amount = income * rng.uniform(5, 18)
-            row.update(requested_amount=int(min(amount, 5_500_000) // 50_000 * 50_000), tenure_months=60,
-                       has_collateral=rng.random() < 0.9,
-                       industry=rng.choice(["Retail trading", "Textiles", "Food processing", "Auto parts",
-                                            "Logistics", "Crypto mining"]),
-                       annual_turnover=round(income * 12 * rng.uniform(3, 8), -4))
-        rows.append(row)
-    return rows
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path, nargs="?")
-    parser.add_argument("--generate", type=int, metavar="N", help="write N synthetic applicants to INPUT and exit")
+    parser.add_argument("--template", action="store_true", help="write an empty CSV with the expected columns to INPUT")
     parser.add_argument("--audit", action="store_true", help="also record decisions in the audit log")
     args = parser.parse_args()
 
-    if args.generate:
-        rows = generate_portfolio(args.generate)
+    if args.template:
         with args.input.open("w", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"Wrote {len(rows)} synthetic applicants to {args.input}")
+            csv.writer(fh).writerow(["application_id", *FIELD_TYPES])
+        print(f"Wrote column template to {args.input}")
         return
 
     with args.input.open(newline="") as fh:

@@ -1,8 +1,7 @@
-import csv
 import json
 
 from src import audit, rules
-from src.batch import generate_portfolio, parse_row, summarise, underwrite_rows
+from src.batch import parse_row, summarise, underwrite_rows
 from src.privacy import redact
 
 
@@ -48,17 +47,3 @@ def test_parse_row_types():
                    "requested_amount": "2000000", "tenure_months": "60", "has_collateral": "TRUE",
                    "property_value": "", "unknown_column": "x"})
     assert a.has_collateral is True and a.property_value is None
-
-
-def test_synthetic_portfolio_is_valid_and_mixed():
-    rows = generate_portfolio(300)
-    results = underwrite_rows([{k: str(v) for k, v in r.items()} for r in rows])
-    decisions = summarise(results)["decisions"]
-    assert "INVALID" not in decisions
-    assert {"APPROVE", "REFER", "DECLINE"} <= set(decisions)
-
-
-def test_sample_csv_in_repo_parses():
-    with open("data/sample_applicants.csv", newline="") as fh:
-        results = underwrite_rows(list(csv.DictReader(fh)))
-    assert len(results) == 500 and all(r["decision"] != "INVALID" for r in results)

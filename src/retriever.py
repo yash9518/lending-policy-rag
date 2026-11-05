@@ -26,45 +26,10 @@ STOPWORDS = {
 }
 
 
-# Lending vocabulary: users and documents use different words for the same thing.
-SYNONYMS = {
-    "enquiry": "inquiry", "enquiries": "inquiry", "dti": "foir", "obligation": "foir",
-    "credit": "bureau", "score": "cibil", "late": "dpd", "overdue": "dpd", "delay": "dpd",
-    "foreclose": "foreclosure", "preclosure": "foreclosure", "prepay": "prepayment",
-    "home": "housing", "house": "housing", "mortgage": "housing", "complaint": "grievance",
-    "salary": "salaried", "approve": "authority", "approves": "authority",
-    "sanction": "authority", "penalty": "penal", "fine": "penal",
-}
-
-
-def stem(token: str) -> str:
-    """Very light suffix stripping so 'deviations'/'deviation', 'charges'/'charge' match."""
-    if len(token) <= 3 or token.endswith(("ss", "us", "is")):
-        return token
-    if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
-    if token.endswith(("sses", "xes", "ches", "shes")):
-        return token[:-2]
-    if token.endswith("s"):
-        return token[:-1]
-    return token
-
-
-def plain_tokenize(text: str) -> list[str]:
-    """Baseline analyzer (no stemming / synonyms), kept for evaluation ablations."""
-    return [t for t in TOKEN_RE.findall(text.lower()) if t not in STOPWORDS]
-
-
 def tokenize(text: str) -> list[str]:
-    tokens = []
-    for t in TOKEN_RE.findall(text.lower()):
-        if t in STOPWORDS:
-            continue
-        t = stem(t)
-        tokens.append(t)
-        if t in SYNONYMS and SYNONYMS[t] != t:
-            tokens.append(SYNONYMS[t])
-    return tokens
+    """Lower-cased word tokens without stopwords. (Stemming and a lending synonym map were
+    evaluated on the RBI golden set and made no measurable difference, so they were removed.)"""
+    return [t for t in TOKEN_RE.findall(text.lower()) if t not in STOPWORDS]
 
 
 @dataclass

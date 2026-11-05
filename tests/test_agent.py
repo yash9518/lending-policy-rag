@@ -31,13 +31,13 @@ class FakeClient:
 
 def test_agent_searches_then_answers_with_verified_citation(retriever):
     client = FakeClient([
-        reply(tool("t1", "search_policy", {"query": "max LTV housing"}), stop="tool_use"),
-        reply(text("Maximum LTV is 80% up to 30 Lakhs and 75% above [RLG §2.2].")),
+        reply(tool("t1", "search_policy", {"query": "LTV ratio housing loans"}), stop="tool_use"),
+        reply(text("Up to 30 lakh the LTV ceiling is 90% [HFC ¶3(a)].")),
     ])
     result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("What is the max LTV?")
-    assert result.answer.startswith("Maximum LTV")
+    assert result.answer.startswith("Up to 30 lakh")
     assert [s.tool for s in result.steps] == ["search_policy"]
-    assert result.grounding == {"cited": ["RLG §2.2"], "unverified": [], "grounded": True}
+    assert result.grounding == {"cited": ["HFC ¶3(a)"], "unverified": [], "grounded": True}
     assert result.usage["llm_calls"] == 2
     # tool result was sent back in a user turn with the matching id
     last_user = client.requests[1]["messages"][-1]
@@ -46,19 +46,19 @@ def test_agent_searches_then_answers_with_verified_citation(retriever):
 
 def test_hallucinated_citation_is_flagged(retriever):
     client = FakeClient([
-        reply(tool("t1", "search_policy", {"query": "inquiries"}), stop="tool_use"),
-        reply(text("Up to 3 inquiries [RLG §3.2]; collateral is optional [RLG §9.9].")),
+        reply(tool("t1", "search_policy", {"query": "penal charges penal interest"}), stop="tool_use"),
+        reply(text("Penal charges, not penal interest [PEN ¶3(i)]; capped at 2% [PEN ¶9.9].")),
     ])
     result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("inquiries?")
-    assert result.grounding["unverified"] == ["RLG §9.9"] and not result.grounding["grounded"]
+    assert result.grounding["unverified"] == ["PEN ¶9.9"] and not result.grounding["grounded"]
 
 
 def test_parallel_tool_calls_and_eligibility_decision(retriever):
     args = {"loan_type": "Personal", "monthly_income": 30000, "cibil_score": 640,
             "requested_amount": 200000, "tenure_months": 24}
     client = FakeClient([
-        reply(tool("a", "check_eligibility", args), tool("b", "search_policy", {"query": "CIBIL"}), stop="tool_use"),
-        reply(text("Declined: CIBIL 640 is below 675 [RLG §3.1] and outside the deviation band [CDA §2.1].")),
+        reply(tool("a", "check_eligibility", args), tool("b", "search_policy", {"query": "key facts statement provided to borrowers before executing the loan contract"}), stop="tool_use"),
+        reply(text("Declined on the lender bureau-score policy; KFS rules [KFS ¶4] apply only after sanction.")),
     ])
     result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("Is this applicant eligible?")
     assert result.decision["decision"] == "DECLINE"
@@ -104,7 +104,7 @@ def test_no_llm_falls_back_to_retrieval(retriever, monkeypatch):
 
 
 def test_verify_citations_requires_a_citation():
-    assert not verify_citations("No citations here.", {"doc §1.1"})["grounded"]
+    assert not verify_citations("No citations here.", {"KFS ¶4"})["grounded"]
 
 
 def test_pii_is_masked_before_reaching_the_llm(retriever):
@@ -122,8 +122,8 @@ def test_refer_decision_reported(retriever):
     args = {"loan_type": "Personal", "monthly_income": 60000, "cibil_score": 660,
             "requested_amount": 300000, "tenure_months": 36}
     client = FakeClient([reply(tool("a", "check_eligibility", args), stop="tool_use"),
-                         reply(text("REFER to Regional Credit Head [CDA §2.1]."))])
+                         reply(text("REFER to Regional Credit Head; provide the KFS first [KFS ¶4]."))])
     result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("eligible?")
     assert result.decision["decision"] == "REFER"
     assert result.decision["sanctioning_authority"] == "Regional Credit Head"
-    assert result.grounding["grounded"]  # CDA §2.1 came from the engine's rule results
+    assert result.grounding["grounded"]  # KFS ¶4 came from the engine's conditions

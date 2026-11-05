@@ -1,0 +1,28 @@
+{
+  "_about": "Lender risk appetite. RBI does not prescribe these thresholds: each lender sets them in its Board-approved credit policy. Edit this file to match your institution. Regulatory rules (LTV caps, KFS, penal charges, SMA/NPA, cooling-off, CDD) are enforced in src/rules.py with citations to the RBI text and are not configurable here.",
+  "version": "lender-policy-2026.1",
+  "min_age": 21,
+  "max_age_at_maturity": 60,
+  "min_monthly_income": {"salaried": 25000, "self_employed": 40000},
+  "foir_income_breakpoint": 50000,
+  "max_foir": {"below_breakpoint": 0.50, "at_or_above_breakpoint": 0.65},
+  "floating_rate_stress_bps": 200,
+  "max_hard_inquiries_90d": 3,
+  "max_dpd_last_6m": 29,
+  "products": {
+    "Personal": {"min_amount": 50000, "max_amount": 1000000, "min_tenure": 12, "max_tenure": 60, "min_cibil": 675, "assumed_rate": 14.0},
+    "Housing":  {"min_amount": 100000, "max_amount": 10000000, "min_tenure": 12, "max_tenure": 360, "min_cibil": 650, "assumed_rate": 9.5},
+    "Business": {"min_amount": 100000, "max_amount": 5000000, "min_tenure": 12, "max_tenure": 84, "min_cibil": 650, "assumed_rate": 16.0, "collateral_required": true}
+  },
+  "prohibited_industries": {
+    "speculative trading": ["speculative", "speculation", "f&o trading", "day trading"],
+    "unregulated money lending": ["money lend", "moneylend", "chit fund", "pawn"],
+    "cryptocurrency mining": ["crypto", "bitcoin", "mining rig"]
+  },
+  "deviation": {"cibil_points": 25, "foir_points": 0.05, "extra_inquiries": 1, "income_shortfall": 0.10, "max_deviations": 2},
+  "authority": [[1000000, "Branch Credit Manager"], [2500000, "Regional Credit Head"], [null, "National Credit Committee"]],
+  "income_documents": {
+    "salaried": "Salary slips (last 3 months) and bank statements (last 6 months)",
+    "self_employed": "ITR with computation of income (last 2 years) and bank statements (last 12 months)"
+  }
+}

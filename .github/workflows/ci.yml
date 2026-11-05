@@ -28,6 +28,8 @@ jobs:
       - run: python -m pytest -q
       - name: Retrieval quality gate (BM25)
         run: python -m evaluation.run_eval --no-dense --min-recall 0.75
+      - name: Back-test against real lender decisions (HMDA)
+        run: python -m evaluation.hmda_backtest | tee -a "$GITHUB_STEP_SUMMARY"
 
   retrieval-eval:
     name: Retrieval eval with real embeddings
