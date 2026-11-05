@@ -1,108 +1,89 @@
-# Lending Policy Retrieval & Eligibility Assistant
+# Agentic Lending Policy & Underwriting Assistant
 
-A Streamlit application for searching lending policy text and checking applicant eligibility against explicit rules. It uses local sentence-transformer embeddings and a persistent Chroma vector store to retrieve relevant clauses, alongside a separate rule-based eligibility checker.
+A credit-officer assistant built on a Claude tool-calling agent. It answers lending-policy questions with cited clauses from a hybrid RAG index, and assesses applicants through a deterministic underwriting rule engine. The LLM plans, retrieves, explains and drafts credit memos. It never makes the credit decision itself.
 
-The policy query tab retrieves the most relevant clauses and, when an Anthropic API key is configured, asks a Claude model to answer the question using only those clauses. Without a key, it shows the retrieved clauses only. Eligibility decisions are still made by a deterministic rule-based checker, not by the LLM, and eligibility rules are defined in code rather than extracted from the documents.
+```mermaid
+flowchart LR
+    U[Credit officer] -->|question / applicant| A[Claude agent loop]
+    A -->|search_policy| R[Hybrid retriever<br/>BM25 + embeddings, RRF]
+    R --> V[(Chroma index<br/>clause-level chunks)]
+    A -->|check_eligibility| E[Rule engine<br/>11 policy rules]
+    A -->|loan_calculator| C[EMI maths]
+    A --> G{Guardrails}
+    G -->|citations verified,<br/>decision locked| U
+```
 
-## Features
+## What it does
 
-- Load policy `.txt` files from `data/policies/`.
-- Split documents into 350-character chunks with 40-character overlap.
-- Embed chunks with `sentence-transformers/all-MiniLM-L6-v2` and store them in `data/chromadb/`.
-- Retrieve the two most relevant chunks for a policy question.
-- Optionally generate a grounded answer from those chunks with Claude (`ANTHROPIC_API_KEY`).
-- Check monthly income, CIBIL score, and DTI/FOIR for Personal, Housing, and Business loans.
-- Includes a small standalone Ragas evaluation example.
-
-## Deploy to the cloud (Streamlit Community Cloud)
-
-1. Push this repository to GitHub (the `.env` file and `data/chromadb/` are git-ignored and are not uploaded).
-2. Go to <https://share.streamlit.io>, click **Create app**, select the repo, branch `main`, and main file `app.py`.
-3. Open **Advanced settings** → **Secrets** and add:
-
-   ```toml
-   ANTHROPIC_API_KEY = "your-key-here"
-   LLM_MODEL = "claude-haiku-5-5"
-   ```
-
-4. Deploy. On first start the app builds the vector index from `data/policies/` automatically (this takes a few minutes while the embedding model downloads). The index lives on the host's disk and is rebuilt after restarts.
-
-Notes: the free tier has limited memory, and `sentence-transformers` pulls in PyTorch, so the first boot can be slow or run out of memory on very small hosts. If that happens, use a host with more RAM (for example a small container on Render, Railway, or Cloud Run).
+| Capability | How |
+| --- | --- |
+| **Agentic Q&A** | A tool-use loop on the Claude Messages API. The model decides which tools to call, reformulates searches when the first results are weak, breaks multi-part questions into several searches and calls tools in parallel. The loop stops after a set number of steps. |
+| **Grounded, verifiable answers** | Every policy fact is cited as `[§x.y]`. After each run, each citation is checked against the clauses the tools actually returned, so a made-up citation is flagged in the UI and counted in evals. |
+| **Deterministic decisions** | `check_eligibility` evaluates all 11 rules in the policy: age at application and at maturity, salaried vs self-employed income, FOIR including the new EMI, product amount and tenure limits, tiered housing LTV, business collateral, CIBIL by product, hard inquiries, 30+ DPD, and prohibited industries. Every rule cites the clause it implements. |
+| **Counter-offers** | The engine computes the largest loan the applicant qualifies for (limited by FOIR headroom, the product cap and LTV). The agent uses it to suggest an amount that can be approved. |
+| **AI credit memo** | Builds a structured memo from the engine's output. A guardrail makes sure the memo states the engine's decision. |
+| **Hybrid retrieval** | BM25 handles exact terms (CIBIL, LTV, DPD). Dense MiniLM embeddings handle paraphrases ("borrow against my house"). The two rankings are merged with Reciprocal Rank Fusion. If the embedding model is unavailable, it falls back to BM25 only. |
+| **Structure-aware chunking** | Each policy bullet becomes one chunk with its section and a stable id (`retail_lending_guidelines §2.2`). Rules are never cut in half. Rebuilding the index is idempotent. `.txt`, `.md` and `.pdf` files are supported. |
+| **Observability** | The UI shows the agent trace: each tool call with its arguments, result and latency, plus token usage per answer. |
+| **Evaluation** | Includes a labelled golden set, retrieval metrics (hit@1, recall@k, MRR for BM25, dense and hybrid), and agent metrics: answer accuracy, citation grounding, tool selection, decision accuracy, and LLM-as-judge faithfulness. |
+| **Works without an API key** | Retrieval, the rule engine and the UI all run without a key. Only generated answers and memos need Claude. |
 
 ## Quick start
-
-Run commands from the repository root in a Python environment compatible with the dependencies.
 
 ```bash
 git clone https://github.com/yash9518/lending-policy-rag.git
 cd lending-policy-rag
-python -m venv .venv
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m src.ingest            # optional: the app builds the index on first start
+streamlit run app.py
 ```
 
-Activate the environment:
-
-```powershell
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-```
-
-```bash
-# macOS / Linux
-source .venv/bin/activate
-```
-
-Install packages, index the included policy, and start the application:
-
-```bash
-python -m pip install -r requirements.txt
-python -m src.ingest
-python -m streamlit run app.py
-```
-
-The first embedding-model load requires internet access to download model files. An LLM API key is optional.
-
-To enable generated answers, create a `.env` file in the repository root (it is git-ignored):
+To enable the agent, create a `.env` file (it is git-ignored):
 
 ```bash
 ANTHROPIC_API_KEY=your-key-here
-# Optional, defaults to claude-haiku-5-5
-LLM_MODEL=claude-haiku-5-5
+LLM_MODEL=claude-haiku-5-5      # default; claude-sonnet-5-5 gives stronger multi-step reasoning
 ```
 
-Open the URL printed by Streamlit. Use **Policy Query (RAG)** to search clauses, or **Eligibility Verification Engine** to check an applicant.
+The app has three tabs:
 
-## Eligibility logic implemented in code
+1. **Ask the agent**: chat about the policy, or describe an applicant in plain English. Expand *Agent trace* to see each tool call.
+2. **Underwrite an applicant**: a full applicant form with a live rule-by-rule decision, EMI, FOIR and max eligible amount, plus **Generate AI credit memo**.
+3. **Retrieval inspector**: compare BM25, dense and hybrid rankings for any query.
 
-| Check | Implemented threshold |
-| --- | --- |
-| Monthly income | At least INR 25,000 |
-| CIBIL for Personal loans | At least 675 |
-| CIBIL for Housing / Business loans | At least 650 |
-| DTI/FOIR when income is below INR 50,000 | At most 50% |
-| DTI/FOIR when income is at least INR 50,000 | At most 65% |
+## Tests and evaluation
 
-These thresholds describe this repository's implementation. The supplied policy text contains additional criteria, including age, self-employment income, loan limits, and overdue history, which the checker does not evaluate. Editing policy text does not change the rules in `src/agent.py`.
+```bash
+pytest                                    # 32 offline tests: rules, chunking, retrieval, agent loop (fake LLM client)
+python -m evaluation.run_eval             # retrieval metrics, no API key needed
+python -m evaluation.run_eval --agent --judge   # end-to-end agent metrics + LLM-as-judge
+```
+
+The agent-loop tests use a scripted fake client. They check tool dispatch, parallel tool results returned in a single turn, error recovery from bad tool arguments, the step limit, flagging of made-up citations, and the decision lock on memos.
+
+Current retrieval baseline, BM25 only, on 14 labelled questions: hit@1 0.79, recall@4 1.00, MRR 0.88. Run the eval with embeddings enabled to compare dense and hybrid.
 
 ## Project layout
 
 | Path | Purpose |
 | --- | --- |
-| `app.py` | Streamlit interface |
-| `src/ingest.py` | Load, split, embed, and index policy text |
-| `src/agent.py` | Retrieve clauses, generate grounded answers, and evaluate eligibility |
-| `src/llm.py` | Optional Claude chat model setup |
-| `data/policies/retail_lending_guidelines.txt` | Included policy document |
-| `evaluation/eval_ragas.py` | Ragas example using three fixed question/context/answer pairs |
-| `requirements.txt` | Python dependencies |
+| `app.py` | Streamlit UI |
+| `src/agent.py` | Agent loop, system prompts, citation verification, credit memo |
+| `src/tools.py` | Tool schemas and executor (`search_policy`, `check_eligibility`, `loan_calculator`) |
+| `src/rules.py` | Underwriting rule engine, EMI / FOIR / LTV maths, max eligible amount |
+| `src/retriever.py` | Hybrid BM25 + dense retriever with RRF |
+| `src/ingest.py` | Structure-aware chunking and Chroma indexing |
+| `src/llm.py`, `src/config.py` | Claude client and settings (env-overridable) |
+| `evaluation/` | Golden set and eval runner |
+| `tests/` | Pytest suite |
 
-## Updating policies and evaluating
+## Design decisions
 
-Add or edit `.txt` files in `data/policies/`. To rebuild an index, stop the app, remove the generated `data/chromadb/` directory, and rerun `python -m src.ingest`. Repeated ingestion into an existing store can retain or duplicate previous content. The generated index is ignored by Git.
+- **The LLM explains, code decides.** Credit decisions must be reproducible and auditable, so approve/decline comes from rules in code. The agent's job is routing, retrieval and explanation. The memo cannot change the decision.
+- **Citations are verified, not trusted.** The model's citations are checked against what was actually retrieved in that run. This catches the most common RAG failure: a confident answer with a made-up source.
+- **Rules live in code, not in the documents.** Thresholds in `src/rules.py` mirror Credit Policy v4.2. Editing the policy text updates retrieval but not the engine, so update `POLICY` in `rules.py` when the policy changes.
 
-The optional evaluation script can be invoked with:
+## Deploying (Streamlit Community Cloud)
 
-```bash
-python -m evaluation.eval_ragas
-```
-
-It evaluates hard-coded examples, not live retrieval from the application. Configure the evaluator's model provider and credentials as required by the installed Ragas version before running it; those settings are not supplied here. Dependency versions are unpinned, so library compatibility may require adjustment.
+Push the repo, create an app with `app.py` as the entry point, and add `ANTHROPIC_API_KEY` (and optionally `LLM_MODEL`) under **Secrets**. On first boot the index is built automatically. `sentence-transformers` pulls in PyTorch, so small hosts may run out of memory. In that case the app still runs in BM25-only mode, or you can use a host with more RAM.

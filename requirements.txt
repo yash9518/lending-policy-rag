@@ -1,13 +1,12 @@
-langchain
-langchain-community
-langchain-core
-langchain-anthropic
-langchain-text-splitters
-chromadb
-sentence-transformers
-huggingface-hub
-ragas
-datasets
-streamlit
-python-dotenv
-pypdf
+# LLM agent
+anthropic>=2.0
+# Retrieval
+chromadb>=1.0
+sentence-transformers>=3.0
+rank-bm25>=0.2.2
+pypdf>=4.0
+# App
+streamlit>=1.46
+python-dotenv>=1.0
+# Tests
+pytest>=8.0

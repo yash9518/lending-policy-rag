@@ -4,3 +4,5 @@ data/chromadb/
 __pycache__/
 *.pyc
 .env
+evaluation/results/
+.pytest_cache/

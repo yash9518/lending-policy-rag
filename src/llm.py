@@ -1,37 +1,23 @@
+"""Claude client setup. The LLM is optional: without credentials the app still
+runs retrieval and the rule engine, it just does not generate answers."""
+from __future__ import annotations
+
 import os
 
-DEFAULT_LLM_MODEL = "claude-haiku-5-5"
+from src import config
 
 
-def build_llm():
-    """Return (llm, status_message).
-
-    The LLM is optional. If ANTHROPIC_API_KEY is not set, or the
-    langchain-anthropic package is not installed, this returns (None, reason)
-    and the app falls back to showing retrieved clauses only.
-    """
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        return None, "LLM disabled: set ANTHROPIC_API_KEY to enable generated answers."
-
+def build_client():
+    """Return (client, model, status_message). ``client`` is None when disabled."""
+    if not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+        return None, config.LLM_MODEL, "LLM disabled: set ANTHROPIC_API_KEY to enable the agent."
     try:
-        from langchain_anthropic import ChatAnthropic
+        import anthropic
     except ImportError:
-        return None, "LLM disabled: install langchain-anthropic to enable generated answers."
-
-    model = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
-    llm = ChatAnthropic(model=model, temperature=0, max_tokens=600)
-    return llm, f"LLM enabled: {model}"
+        return None, config.LLM_MODEL, "LLM disabled: `pip install anthropic` to enable the agent."
+    return anthropic.Anthropic(max_retries=3), config.LLM_MODEL, f"LLM enabled: {config.LLM_MODEL}"
 
 
-def message_text(response) -> str:
-    """Extract plain text from a chat model response."""
-    content = response.content
-    if isinstance(content, str):
-        return content.strip()
-    parts = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            parts.append(block.get("text", ""))
-        elif isinstance(block, str):
-            parts.append(block)
-    return "".join(parts).strip()
+def response_text(response) -> str:
+    """Concatenate the text blocks of a Messages API response."""
+    return "".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
