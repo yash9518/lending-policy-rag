@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from src import rules
+from src import audit, rules
 from src.retriever import HybridRetriever
 
 LOAN_TYPES = ["Personal", "Housing", "Business"]
@@ -19,7 +19,9 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "search_policy",
         "description": (
             "Search the lending policy documents and return the most relevant clauses, each with a "
-            "citation id (e.g. 'retail_lending_guidelines §2.2'). Use it for any question about policy "
+            "citation id (e.g. 'RLG §2.2'). The corpus covers underwriting rules (RLG), credit deviations and "
+            "approval authority (CDA), KYC and documentation (KD), pricing and charges (PC), fair practices "
+            "and grievances (FPG), and collections (CR). Use it for any question about policy "
             "rules, limits, thresholds or definitions. Call it again with a reworded or narrower query if "
             "the first results do not answer the question; ask about one topic per call."
         ),
@@ -36,8 +38,9 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "check_eligibility",
         "description": (
             "Run the deterministic underwriting rule engine on an applicant. This is the ONLY source of "
-            "approve/decline decisions. Returns every rule checked (pass/fail, detail, policy citation), "
-            "the proposed EMI, FOIR and the maximum loan amount the applicant qualifies for. Only call it "
+            "credit decisions: APPROVE, REFER (permitted deviation, needs higher authority) or DECLINE. "
+            "Returns every rule checked (pass/deviation/fail, detail, policy citation), proposed EMI, FOIR, "
+            "max eligible amount, sanctioning authority, conditions and required documents. Only call it "
             "when the user has given at least loan type, monthly income, CIBIL score, amount and tenure; "
             "otherwise ask for the missing values. Omit optional fields that the user did not give."
         ),
@@ -52,9 +55,12 @@ TOOL_SCHEMAS: list[dict] = [
                 "age": {"type": "integer", "description": "Applicant age in years (default 30)."},
                 "employment_type": {"type": "string", "enum": ["salaried", "self_employed"]},
                 "existing_emi": {"type": "number", "description": "Existing monthly EMIs in INR (default 0)."},
-                "annual_interest_rate": {"type": "number", "description": "Annual rate in % (default 12)."},
+                "annual_interest_rate": {"type": "number", "description": "Annual rate in %. Omit to use the policy's conservative default for the product/score."},
                 "hard_inquiries_90d": {"type": "integer", "minimum": 0},
                 "max_dpd_last_6m": {"type": "integer", "minimum": 0, "description": "Worst days-past-due in 6 months."},
+                "adverse_history": {"type": "boolean", "description": "Write-off/settlement in 36 months or wilful defaulter."},
+                "kyc_complete": {"type": "boolean", "description": "False if KYC is incomplete (default true)."},
+                "annual_turnover": {"type": "number", "description": "Annual turnover in INR (self-employed)."},
                 "industry": {"type": "string", "description": "Applicant's business/industry, if relevant."},
                 "property_value": {"type": "number", "description": "Property value in INR (housing loans)."},
                 "has_collateral": {"type": "boolean", "description": "Collateral offered (business loans)."},
@@ -79,8 +85,9 @@ TOOL_SCHEMAS: list[dict] = [
 
 
 class ToolExecutor:
-    def __init__(self, retriever: HybridRetriever):
+    def __init__(self, retriever: HybridRetriever, audit_channel: str | None = "agent"):
         self.retriever = retriever
+        self.audit_channel = audit_channel  # None disables audit logging (tests, evals)
         self.retrieved: dict[str, dict] = {}  # every clause shown to the model in this run, by id
         self._handlers: dict[str, Callable[[dict], Any]] = {
             "search_policy": self.search_policy,
@@ -119,8 +126,12 @@ class ToolExecutor:
         unknown = set(args) - allowed
         if unknown:
             raise ValueError(f"unknown fields {sorted(unknown)}")
-        decision = rules.evaluate(rules.Applicant(**args))
-        return decision.to_dict()
+        applicant = rules.Applicant(**args)
+        decision = rules.evaluate(applicant)
+        result = decision.to_dict()
+        if self.audit_channel:
+            result["audit_id"] = audit.record(applicant, decision, channel=self.audit_channel)
+        return result
 
     def loan_calculator(self, args: dict) -> dict:
         principal = float(args["principal"])

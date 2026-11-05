@@ -10,3 +10,4 @@ streamlit>=1.46
 python-dotenv>=1.0
 # Tests
 pytest>=8.0
+hypothesis>=6.0

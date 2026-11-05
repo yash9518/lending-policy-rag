@@ -1,0 +1,18 @@
+MERIDIAN RETAIL FINANCE LTD. (FICTIONAL) - COLLECTIONS AND RECOVERY POLICY (v1.8)
+
+1. DELINQUENCY CLASSIFICATION:
+- SMA-0: principal or interest overdue for 1 to 30 days.
+- SMA-1: overdue for 31 to 60 days.
+- SMA-2: overdue for 61 to 90 days.
+- An account overdue for more than 90 days is classified as a Non-Performing Asset (NPA).
+- An NPA account is upgraded to standard only after the entire arrears of interest and principal are repaid.
+
+2. CONDUCT OF COLLECTIONS:
+- Recovery calls and visits are permitted only between 8:00 AM and 7:00 PM.
+- Recovery agents must carry an authorisation letter and identity card, and must complete certified training before deployment.
+- Intimidation, harassment, use of abusive language, or contacting the borrower's family, friends or colleagues to shame the borrower is prohibited.
+
+3. RESTRUCTURING:
+- Borrowers facing temporary financial stress may request restructuring before the account becomes an NPA.
+- Restructuring options include tenure extension of up to 24 months within product and age limits, or an EMI moratorium of up to 3 months.
+- Restructured accounts are reported to credit bureaus as restructured, in line with regulatory requirements.

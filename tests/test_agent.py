@@ -32,12 +32,12 @@ class FakeClient:
 def test_agent_searches_then_answers_with_verified_citation(retriever):
     client = FakeClient([
         reply(tool("t1", "search_policy", {"query": "max LTV housing"}), stop="tool_use"),
-        reply(text("Maximum LTV is 80% up to 30 Lakhs and 75% above [§2.2].")),
+        reply(text("Maximum LTV is 80% up to 30 Lakhs and 75% above [RLG §2.2].")),
     ])
-    result = PolicyAgent(retriever, client=client, model="fake").run("What is the max LTV?")
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("What is the max LTV?")
     assert result.answer.startswith("Maximum LTV")
     assert [s.tool for s in result.steps] == ["search_policy"]
-    assert result.grounding == {"cited": ["2.2"], "unverified": [], "grounded": True}
+    assert result.grounding == {"cited": ["RLG §2.2"], "unverified": [], "grounded": True}
     assert result.usage["llm_calls"] == 2
     # tool result was sent back in a user turn with the matching id
     last_user = client.requests[1]["messages"][-1]
@@ -47,20 +47,20 @@ def test_agent_searches_then_answers_with_verified_citation(retriever):
 def test_hallucinated_citation_is_flagged(retriever):
     client = FakeClient([
         reply(tool("t1", "search_policy", {"query": "inquiries"}), stop="tool_use"),
-        reply(text("Up to 3 inquiries [§3.2]; collateral is optional [§9.9].")),
+        reply(text("Up to 3 inquiries [RLG §3.2]; collateral is optional [RLG §9.9].")),
     ])
-    result = PolicyAgent(retriever, client=client, model="fake").run("inquiries?")
-    assert result.grounding["unverified"] == ["9.9"] and not result.grounding["grounded"]
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("inquiries?")
+    assert result.grounding["unverified"] == ["RLG §9.9"] and not result.grounding["grounded"]
 
 
 def test_parallel_tool_calls_and_eligibility_decision(retriever):
-    args = {"loan_type": "Personal", "monthly_income": 30000, "cibil_score": 650,
+    args = {"loan_type": "Personal", "monthly_income": 30000, "cibil_score": 640,
             "requested_amount": 200000, "tenure_months": 24}
     client = FakeClient([
         reply(tool("a", "check_eligibility", args), tool("b", "search_policy", {"query": "CIBIL"}), stop="tool_use"),
-        reply(text("Declined: CIBIL 650 is below 675 [§3.1].")),
+        reply(text("Declined: CIBIL 640 is below 675 [RLG §3.1] and outside the deviation band [CDA §2.1].")),
     ])
-    result = PolicyAgent(retriever, client=client, model="fake").run("Is this applicant eligible?")
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("Is this applicant eligible?")
     assert result.decision["decision"] == "DECLINE"
     assert "Bureau score" in result.decision["failed_rules"]
     results_turn = client.requests[1]["messages"][-1]["content"]
@@ -74,7 +74,7 @@ def test_bad_tool_arguments_return_error_to_model(retriever):
                                                "requested_amount": 1, "tenure_months": 1}), stop="tool_use"),
         reply(text("Car loans are not offered.")),
     ])
-    result = PolicyAgent(retriever, client=client, model="fake").run("car loan?")
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("car loan?")
     assert result.steps[0].is_error
     assert client.requests[1]["messages"][-1]["content"][0]["is_error"] is True
 
@@ -82,7 +82,7 @@ def test_bad_tool_arguments_return_error_to_model(retriever):
 def test_step_budget_forces_final_answer(retriever):
     looping = [reply(tool(f"t{i}", "search_policy", {"query": "x"}), stop="tool_use") for i in range(2)]
     client = FakeClient([*looping, reply(text("Best effort answer."))])
-    result = PolicyAgent(retriever, client=client, model="fake").run("q", max_steps=2)
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("q", max_steps=2)
     assert result.answer == "Best effort answer."
     assert client.requests[-1]["tool_choice"] == {"type": "none"}
 
@@ -91,17 +91,39 @@ def test_memo_cannot_change_engine_decision(retriever):
     client = FakeClient([reply(text("**Summary:** Looks fine."))])
     applicant = Applicant(loan_type="Personal", monthly_income=30000, cibil_score=600,
                           requested_amount=100000, tenure_months=24)
-    result = PolicyAgent(retriever, client=client, model="fake").underwriting_memo(applicant)
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).underwriting_memo(applicant)
     assert result.answer.startswith("**Decision:** DECLINE")
 
 
 def test_no_llm_falls_back_to_retrieval(retriever, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    agent = PolicyAgent(retriever)
+    agent = PolicyAgent(retriever, audit_channel=None)
     result = agent.run("minimum age")
     assert result.answer is None and result.sources and "disabled" in result.message
 
 
 def test_verify_citations_requires_a_citation():
     assert not verify_citations("No citations here.", {"doc §1.1"})["grounded"]
+
+
+def test_pii_is_masked_before_reaching_the_llm(retriever):
+    client = FakeClient([reply(text("Noted."))])
+    agent = PolicyAgent(retriever, client=client, model="fake", audit_channel=None)
+    result = agent.run("Applicant PAN ABCDE1234F, phone 9876543210, wants a personal loan",
+                       history=[{"role": "user", "content": "My email is a.b@example.com"},
+                                {"role": "assistant", "content": "ok"}])
+    sent = json.dumps(client.requests[0]["messages"])
+    assert "ABCDE1234F" not in sent and "9876543210" not in sent and "example.com" not in sent
+    assert result.redactions == {"PAN": 1, "PHONE": 1, "EMAIL": 1}
+
+
+def test_refer_decision_reported(retriever):
+    args = {"loan_type": "Personal", "monthly_income": 60000, "cibil_score": 660,
+            "requested_amount": 300000, "tenure_months": 36}
+    client = FakeClient([reply(tool("a", "check_eligibility", args), stop="tool_use"),
+                         reply(text("REFER to Regional Credit Head [CDA §2.1]."))])
+    result = PolicyAgent(retriever, client=client, model="fake", audit_channel=None).run("eligible?")
+    assert result.decision["decision"] == "REFER"
+    assert result.decision["sanctioning_authority"] == "Regional Credit Head"
+    assert result.grounding["grounded"]  # CDA §2.1 came from the engine's rule results

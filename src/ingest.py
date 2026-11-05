@@ -4,7 +4,7 @@ Chunking is structure-aware: policy documents are written as numbered
 sections ("1. ELIGIBILITY CRITERIA:") containing bullet clauses ("- ...").
 Each bullet becomes one chunk tagged with its section, so a retrieved chunk
 is always a complete rule with a stable citation id such as
-``retail_lending_guidelines §1.2``. Text that does not follow this layout
+``RLG §1.2`` (document code + section.clause). Text that does not follow this layout
 falls back to paragraph/size-based splitting.
 
 Run ``python -m src.ingest`` to (re)build the dense vector index. Rebuilding
@@ -23,9 +23,15 @@ BULLET_RE = re.compile(r"^\s*[-*•]\s+(.*)$")
 FALLBACK_CHUNK_CHARS = 600
 
 
+def doc_code(source: str) -> str:
+    """Short citation prefix from the file name: retail_lending_guidelines -> RLG."""
+    words = [w for w in re.split(r"[_\-\s]+", Path(source).stem) if w and w.lower() not in {"and", "of", "the"}]
+    return "".join(w[0] for w in words).upper() or "DOC"
+
+
 @dataclass
 class Chunk:
-    id: str  # citation id, e.g. "retail_lending_guidelines §1.2"
+    id: str  # citation id, e.g. "RLG §1.2" (document code + section.clause)
     text: str  # clause text shown to users and the LLM
     source: str  # file name
     section: str  # section title, e.g. "Eligibility Criteria"
@@ -61,7 +67,7 @@ def _split_long(text: str, max_chars: int = FALLBACK_CHUNK_CHARS) -> list[str]:
 
 
 def chunk_document(text: str, source: str) -> list[Chunk]:
-    stem = Path(source).stem
+    stem = doc_code(source)
     chunks: list[Chunk] = []
     section_no, section_title = "0", "Document Header"
     clause_no = 0
@@ -103,6 +109,10 @@ def load_chunks(policy_dir: Path = config.POLICY_DIR) -> list[Chunk]:
     for path in sorted(policy_dir.iterdir()):
         if path.suffix.lower() in {".txt", ".md", ".pdf"}:
             chunks.extend(chunk_document(read_document(path), path.name))
+    ids = [c.id for c in chunks]
+    duplicates = {i for i in ids if ids.count(i) > 1}
+    if duplicates:
+        raise ValueError(f"Duplicate clause ids {sorted(duplicates)}: two documents share a code; rename one file")
     return chunks
 
 
