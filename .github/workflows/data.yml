@@ -1,9 +1,10 @@
 name: Data sources
 
+# Downloads the real RBI regulations and HMDA records listed in data/sources.json
+# and commits them, so the repository always holds the exact text that was indexed.
 on:
   push:
     paths:
-      - "scripts/discover_sources.py"
       - "scripts/fetch_sources.py"
       - "data/sources.json"
       - ".github/workflows/data.yml"
@@ -13,11 +14,20 @@ permissions:
   contents: write
 
 jobs:
-  discover:
+  fetch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python scripts/discover_sources.py
+      - name: Download sources
+        run: python scripts/fetch_sources.py
+      - name: Commit refreshed data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/policies data/hmda
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Refresh RBI regulations and HMDA data from official sources"
+          git push
