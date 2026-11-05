@@ -76,7 +76,10 @@ So a 50% cap (this engine's FOIR setting for lower incomes) reproduces most real
 | Retriever | hit@1 | recall@3 | MRR |
 | --- | --- | --- | --- |
 | BM25 | 0.675 | 0.825 | 0.758 |
-| Dense / hybrid | see the CI job summary | | |
+| Dense (MiniLM embeddings) | 0.625 | 0.800 | 0.712 |
+| **Hybrid (RRF)** | **0.750** | **0.850** | **0.812** |
+
+Measured in CI with the real embedding model. Hybrid search beats both of its parts on the real corpus. On an earlier 82-clause synthetic corpus, dense alone had won, which is why this is measured on the real text rather than assumed.
 
 Stemming and a lending synonym map were tried on the real corpus and made no measurable difference (within ±2 questions of 40), so they were removed.
 
