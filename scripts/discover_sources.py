@@ -30,14 +30,14 @@ def subject(html):
     return (ref.group(0) if ref else None), (date.group(1) if date else None), (m.group(1) if m else t[:140])
 
 
-for page in ["/Scripts/BS_ViewMasterDirections.aspx", "/Scripts/BS_ViewMasterCirculardetails.aspx"]:
+for page in []:
     html = get(BASE + page)
     for href, inner in re.findall(r"<a\b[^>]*?href\s*=\s*['\"]([^'\"]+)['\"][^>]*>(.*?)</a>", html, re.S | re.I):
         label = text_of(inner)
         if KEYWORDS.search(label):
             print(f"LIST {page.split('/')[-1]} | {label[:170]} | {href}")
 
-for i in list(range(12526, 12534)) + list(range(12176, 12200)) + list(range(12820, 12840)):
+for i in list(range(12860, 12960)):
     try:
         ref, date, subj = subject(get(f"{BASE}/Scripts/NotificationUser.aspx?Id={i}"))
         if KEYWORDS.search(subj or ""):
