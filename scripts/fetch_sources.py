@@ -73,7 +73,13 @@ def extract_document(text: str) -> str:
         idx = body.find(marker)
         if idx > 1000:
             body = body[:idx]
-    return body.strip()
+    # Drop the site's archive navigation (bare years / month names / "Archives") left at the end.
+    nav = re.compile(r"^(?:\d{4}|Archives|January|February|March|April|May|June|July|August|September|"
+                     r"October|November|December)?$")
+    lines = body.rstrip().splitlines()
+    while lines and nav.match(lines[-1].strip()):
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def fetch_rbi(entries: list[dict]) -> None:
